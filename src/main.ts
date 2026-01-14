@@ -1,99 +1,112 @@
-import {App, Editor, MarkdownView, Modal, Notice, Plugin} from 'obsidian';
-import {DEFAULT_SETTINGS, MyPluginSettings, SampleSettingTab} from "./settings";
+import { Notice, Plugin, stringifyYaml, TFile } from "obsidian";
+import { CitationManagerSettings } from "./types";
+import { DEFAULT_SETTINGS, CitationManagerSettingTab } from "./settings";
+import { BibtexInputModal } from "./ui/BibtexInputModal";
+import { parseBibtex } from "./utils/bibtexParser";
+import { sanitizeFilename } from "./utils/filenameUtils";
+import { generateCitationKey, findUniqueCitationKey } from "./utils/citationKeyGenerator";
 
-// Remember to rename these classes and interfaces!
+export default class CitationManagerPlugin extends Plugin {
+	settings: CitationManagerSettings;
 
-export default class MyPlugin extends Plugin {
-	settings: MyPluginSettings;
-
-	async onload() {
+	async onload(): Promise<void> {
 		await this.loadSettings();
 
-		// This creates an icon in the left ribbon.
-		this.addRibbonIcon('dice', 'Sample', (evt: MouseEvent) => {
-			// Called when the user clicks the icon.
-			new Notice('This is a notice!');
-		});
-
-		// This adds a status bar item to the bottom of the app. Does not work on mobile apps.
-		const statusBarItemEl = this.addStatusBarItem();
-		statusBarItemEl.setText('Status bar text');
-
-		// This adds a simple command that can be triggered anywhere
 		this.addCommand({
-			id: 'open-modal-simple',
-			name: 'Open modal (simple)',
+			id: "create-literature-note-from-bibtex",
+			name: "Create literature note from BibTeX string",
 			callback: () => {
-				new SampleModal(this.app).open();
-			}
-		});
-		// This adds an editor command that can perform some operation on the current editor instance
-		this.addCommand({
-			id: 'replace-selected',
-			name: 'Replace selected content',
-			editorCallback: (editor: Editor, view: MarkdownView) => {
-				editor.replaceSelection('Sample editor command');
-			}
-		});
-		// This adds a complex command that can check whether the current state of the app allows execution of the command
-		this.addCommand({
-			id: 'open-modal-complex',
-			name: 'Open modal (complex)',
-			checkCallback: (checking: boolean) => {
-				// Conditions to check
-				const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (markdownView) {
-					// If checking is true, we're simply "checking" if the command can be run.
-					// If checking is false, then we want to actually perform the operation.
-					if (!checking) {
-						new SampleModal(this.app).open();
-					}
-
-					// This command will only show up in Command Palette when the check function returns true
-					return true;
-				}
-				return false;
-			}
+				new BibtexInputModal(this.app, (bibtex) => {
+					this.createLiteratureNote(bibtex);
+				}).open();
+			},
 		});
 
-		// This adds a settings tab so the user can configure various aspects of the plugin
-		this.addSettingTab(new SampleSettingTab(this.app, this));
-
-		// If the plugin hooks up any global DOM events (on parts of the app that doesn't belong to this plugin)
-		// Using this function will automatically remove the event listener when this plugin is disabled.
-		this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
-			new Notice("Click");
-		});
-
-		// When registering intervals, this function will automatically clear the interval when the plugin is disabled.
-		this.registerInterval(window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000));
-
+		this.addSettingTab(new CitationManagerSettingTab(this.app, this));
 	}
 
-	onunload() {
+	async loadSettings(): Promise<void> {
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData() as Partial<CitationManagerSettings>);
 	}
 
-	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData() as Partial<MyPluginSettings>);
-	}
-
-	async saveSettings() {
+	async saveSettings(): Promise<void> {
 		await this.saveData(this.settings);
 	}
-}
 
-class SampleModal extends Modal {
-	constructor(app: App) {
-		super(app);
-	}
+	private async createLiteratureNote(bibtexString: string): Promise<void> {
+		// Validate folder setting
+		if (!this.settings.literatureFolder) {
+			new Notice("Please set a literature folder in settings first.");
+			return;
+		}
 
-	onOpen() {
-		let {contentEl} = this;
-		contentEl.setText('Woah!');
-	}
+		// Ensure the folder exists
+		const folder = this.app.vault.getAbstractFileByPath(this.settings.literatureFolder);
+		if (!folder) {
+			new Notice(`Literature folder "${this.settings.literatureFolder}" does not exist.`);
+			return;
+		}
 
-	onClose() {
-		const {contentEl} = this;
-		contentEl.empty();
+		// Parse BibTeX
+		const entry = parseBibtex(bibtexString);
+		if (!entry) {
+			new Notice("Failed to parse BibTeX entry. Please check the format.");
+			return;
+		}
+
+		// Get title for filename
+		const title = entry.entryTags.title || "Untitled";
+		const sanitizedTitle = sanitizeFilename(title);
+		const filePath = `${this.settings.literatureFolder}/${sanitizedTitle}.md`;
+
+		// Check if note already exists
+		const existingFile = this.app.vault.getAbstractFileByPath(filePath);
+		if (existingFile instanceof TFile) {
+			new Notice(`Note "${sanitizedTitle}" already exists. Skipping.`);
+			return;
+		}
+
+		// Generate citation key with collision detection
+		const baseKey = generateCitationKey(
+			entry.entryTags.author,
+			entry.entryTags.year,
+			entry.entryTags.title
+		);
+		const { key: citationKey, hadCollision } = await findUniqueCitationKey(
+			this.app,
+			baseKey,
+			this.settings.literatureFolder
+		);
+
+		if (hadCollision) {
+			new Notice(`Citation key collision detected. Using "${citationKey}" instead.`);
+		}
+
+		// Build frontmatter with all BibTeX fields
+		const frontmatterData: Record<string, string> = {
+			citationKey,
+			...entry.entryTags,
+		};
+
+		// Add entry type if not already present
+		if (entry.entryType && !frontmatterData.entryType) {
+			frontmatterData.entryType = entry.entryType;
+		}
+
+		const yamlContent = stringifyYaml(frontmatterData);
+		let content = `---\n${yamlContent}---\n`;
+
+		// Optionally add URL to content
+		if (this.settings.addUrlToContent && entry.entryTags.url) {
+			content += `\n- [${entry.entryTags.url}](${entry.entryTags.url})\n`;
+		}
+
+		// Create the note
+		try {
+			await this.app.vault.create(filePath, content);
+			new Notice(`Created literature note: ${sanitizedTitle}`);
+		} catch (error) {
+			new Notice(`Failed to create note: ${error instanceof Error ? error.message : "Unknown error"}`);
+		}
 	}
 }
