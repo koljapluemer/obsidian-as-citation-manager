@@ -83,10 +83,15 @@ export default class CitationManagerPlugin extends Plugin {
 		}
 
 		// Build frontmatter with all BibTeX fields
-		const frontmatterData: Record<string, string> = {
+		const frontmatterData: Record<string, string | string[]> = {
 			citationKey,
 			...entry.entryTags,
 		};
+
+		// Add title to aliases if it differs from filename (truncated or sanitized)
+		if (entry.entryTags.title && entry.entryTags.title !== sanitizedTitle) {
+			frontmatterData.aliases = [entry.entryTags.title];
+		}
 
 		// Add entry type if not already present
 		if (entry.entryType && !frontmatterData.entryType) {
