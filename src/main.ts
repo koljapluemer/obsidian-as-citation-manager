@@ -1,16 +1,25 @@
-import { Notice, Plugin, stringifyYaml, TFile } from "obsidian";
+import { debounce, EventRef, Notice, Plugin, stringifyYaml, TAbstractFile, TFile } from "obsidian";
 import { CitationManagerSettings } from "./types";
 import { DEFAULT_SETTINGS, CitationManagerSettingTab } from "./settings";
 import { BibtexInputModal } from "./ui/BibtexInputModal";
 import { parseBibtex } from "./utils/bibtexParser";
 import { sanitizeFilename } from "./utils/filenameUtils";
 import { generateCitationKey, findUniqueCitationKey } from "./utils/citationKeyGenerator";
+import { extractBibEntry, generateBibFile, BibEntry } from "./utils/bibtexGenerator";
 
 export default class CitationManagerPlugin extends Plugin {
 	settings: CitationManagerSettings;
+	private bibSyncEventRefs: EventRef[] = [];
+	private debouncedSyncBibFile: () => void;
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
+
+		// Initialize debounced sync function (2 second delay)
+		this.debouncedSyncBibFile = debounce(() => this.syncBibFile(), 2000, true);
+
+		// Set up bib sync listeners if enabled
+		this.updateBibSyncListeners();
 
 		this.addCommand({
 			id: "create-literature-note-from-bibtex",
@@ -200,6 +209,117 @@ export default class CitationManagerPlugin extends Plugin {
 			new Notice(`Added BibTeX metadata to: ${file.basename}`);
 		} catch (error) {
 			new Notice(`Failed to update note: ${error instanceof Error ? error.message : "Unknown error"}`);
+		}
+	}
+
+	/**
+	 * Updates the bib sync event listeners based on current settings.
+	 * Called when the plugin loads or when settings change.
+	 */
+	updateBibSyncListeners(): void {
+		// Remove existing listeners
+		for (const ref of this.bibSyncEventRefs) {
+			this.app.metadataCache.offref(ref);
+			this.app.vault.offref(ref);
+		}
+		this.bibSyncEventRefs = [];
+
+		// Only add listeners if bib sync is enabled
+		if (!this.settings.enableBibSync) {
+			return;
+		}
+
+		// Listen for metadata changes (frontmatter updated)
+		const changedRef = this.app.metadataCache.on("changed", (file) => {
+			if (this.isInLiteratureFolder(file)) {
+				this.debouncedSyncBibFile();
+			}
+		});
+		this.bibSyncEventRefs.push(changedRef);
+
+		// Listen for file deletions
+		const deletedRef = this.app.metadataCache.on("deleted", (file) => {
+			if (this.isInLiteratureFolder(file)) {
+				this.debouncedSyncBibFile();
+			}
+		});
+		this.bibSyncEventRefs.push(deletedRef);
+
+		// Listen for file renames/moves
+		const renameRef = this.app.vault.on("rename", (file, oldPath) => {
+			const wasInFolder = this.isPathInLiteratureFolder(oldPath);
+			const isInFolder = file instanceof TFile && this.isInLiteratureFolder(file);
+			if (wasInFolder || isInFolder) {
+				this.debouncedSyncBibFile();
+			}
+		});
+		this.bibSyncEventRefs.push(renameRef);
+	}
+
+	/**
+	 * Checks if a file is in the literature folder.
+	 */
+	private isInLiteratureFolder(file: TAbstractFile): boolean {
+		if (!(file instanceof TFile)) {
+			return false;
+		}
+		return this.isPathInLiteratureFolder(file.path);
+	}
+
+	/**
+	 * Checks if a path is in the literature folder.
+	 */
+	private isPathInLiteratureFolder(path: string): boolean {
+		if (!this.settings.literatureFolder) {
+			return false;
+		}
+		const folderPath = this.settings.literatureFolder;
+		return path.startsWith(folderPath + "/") || path === folderPath;
+	}
+
+	/**
+	 * Synchronizes the .bib file with all literature notes in the configured folder.
+	 */
+	private async syncBibFile(): Promise<void> {
+		// Skip if no literature folder set or no bib file path set
+		if (!this.settings.literatureFolder || !this.settings.bibFilePath) {
+			return;
+		}
+
+		const folder = this.app.vault.getAbstractFileByPath(this.settings.literatureFolder);
+		if (!folder) {
+			return;
+		}
+
+		// Collect all bib entries from notes in the literature folder
+		const entries: BibEntry[] = [];
+		const files = this.app.vault.getMarkdownFiles().filter(f => this.isInLiteratureFolder(f));
+
+		for (const file of files) {
+			const cache = this.app.metadataCache.getFileCache(file);
+			if (!cache?.frontmatter) {
+				continue;
+			}
+
+			const entry = extractBibEntry(cache.frontmatter);
+			if (entry) {
+				entries.push(entry);
+			}
+		}
+
+		// Generate bib file content
+		const bibContent = generateBibFile(entries);
+
+		// Write or update the bib file
+		try {
+			const existingFile = this.app.vault.getAbstractFileByPath(this.settings.bibFilePath);
+			if (existingFile instanceof TFile) {
+				await this.app.vault.modify(existingFile, bibContent);
+			} else {
+				await this.app.vault.create(this.settings.bibFilePath, bibContent);
+			}
+		} catch {
+			// Silently fail
 		}
 	}
 }

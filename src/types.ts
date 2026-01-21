@@ -1,6 +1,8 @@
 export interface CitationManagerSettings {
 	literatureFolder: string;
 	addUrlToContent: boolean;
+	bibFilePath: string;
+	enableBibSync: boolean;
 }
 
 export interface BibtexEntry {
