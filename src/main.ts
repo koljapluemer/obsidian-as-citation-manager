@@ -22,6 +22,21 @@ export default class CitationManagerPlugin extends Plugin {
 			},
 		});
 
+		this.addCommand({
+			id: "add-bibtex-to-current-note",
+			name: "Add BibTeX metadata to current note",
+			callback: () => {
+				const activeFile = this.app.workspace.getActiveFile();
+				if (!activeFile) {
+					new Notice("No active file. Please open a note first.");
+					return;
+				}
+				new BibtexInputModal(this.app, (bibtex) => {
+					this.addBibtexToCurrentNote(activeFile, bibtex);
+				}).open();
+			},
+		});
+
 		this.addSettingTab(new CitationManagerSettingTab(this.app, this));
 	}
 
@@ -112,6 +127,79 @@ export default class CitationManagerPlugin extends Plugin {
 			new Notice(`Created literature note: ${sanitizedTitle}`);
 		} catch (error) {
 			new Notice(`Failed to create note: ${error instanceof Error ? error.message : "Unknown error"}`);
+		}
+	}
+
+	private async addBibtexToCurrentNote(file: TFile, bibtexString: string): Promise<void> {
+		// Parse BibTeX
+		const entry = parseBibtex(bibtexString);
+		if (!entry) {
+			new Notice("Failed to parse BibTeX entry. Please check the format.");
+			return;
+		}
+
+		// Read current file content
+		const currentContent = await this.app.vault.read(file);
+
+		// Parse existing frontmatter
+		const frontmatterRegex = /^---\n([\s\S]*?)\n---\n?/;
+		const match = currentContent.match(frontmatterRegex);
+
+		let existingFrontmatter: Record<string, unknown> = {};
+		let bodyContent = currentContent;
+
+		if (match) {
+			// Extract existing frontmatter using Obsidian's cache
+			const cache = this.app.metadataCache.getFileCache(file);
+			if (cache?.frontmatter) {
+				existingFrontmatter = { ...cache.frontmatter };
+				// Remove position metadata added by Obsidian
+				delete existingFrontmatter.position;
+			}
+			bodyContent = currentContent.slice(match[0].length);
+		}
+
+		// Generate citation key if not already present
+		let citationKey = existingFrontmatter.citationKey as string | undefined;
+		if (!citationKey) {
+			const baseKey = generateCitationKey(
+				entry.entryTags.author,
+				entry.entryTags.year,
+				entry.entryTags.title
+			);
+			const { key, hadCollision } = await findUniqueCitationKey(
+				this.app,
+				baseKey,
+				this.settings.literatureFolder
+			);
+			citationKey = key;
+			if (hadCollision) {
+				new Notice(`Citation key collision detected. Using "${citationKey}" instead.`);
+			}
+		}
+
+		// Merge BibTeX data into frontmatter (BibTeX values overwrite existing)
+		const mergedFrontmatter: Record<string, unknown> = {
+			...existingFrontmatter,
+			citationKey,
+			...entry.entryTags,
+		};
+
+		// Add entry type if not already present
+		if (entry.entryType && !mergedFrontmatter.entryType) {
+			mergedFrontmatter.entryType = entry.entryType;
+		}
+
+		// Build new content
+		const yamlContent = stringifyYaml(mergedFrontmatter);
+		const newContent = `---\n${yamlContent}---\n${bodyContent}`;
+
+		// Update the file
+		try {
+			await this.app.vault.modify(file, newContent);
+			new Notice(`Added BibTeX metadata to: ${file.basename}`);
+		} catch (error) {
+			new Notice(`Failed to update note: ${error instanceof Error ? error.message : "Unknown error"}`);
 		}
 	}
 }
