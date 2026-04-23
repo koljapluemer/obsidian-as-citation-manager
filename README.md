@@ -1,90 +1,127 @@
-# Obsidian Sample Plugin
+# Obsidian as Citation Manager
 
-This is a sample plugin for Obsidian (https://obsidian.md).
+An Obsidian plugin that treats your vault as the source of truth for citation metadata.
 
-This project uses TypeScript to provide type checking and documentation.
-The repo depends on the latest plugin API (obsidian.d.ts) in TypeScript Definition format, which contains TSDoc comments describing what it does.
+Instead of managing references in a separate app and exporting into Obsidian later, this plugin lets you paste a BibTeX entry directly into Obsidian, create or enrich a literature note from it, and optionally keep a `.bib` file in sync with the metadata stored in those notes.
 
-This sample plugin demonstrates some of the basic functionality the plugin API can do.
-- Adds a ribbon icon, which shows a Notice when clicked.
-- Adds a command "Open modal (simple)" which opens a Modal.
-- Adds a plugin setting tab to the settings page.
-- Registers a global click event and output 'click' to the console.
-- Registers a global interval which logs 'setInterval' to the console.
+## What it does
 
-## First time developing plugins?
+- Creates a literature note from a pasted BibTeX entry
+- Stores BibTeX fields in YAML frontmatter
+- Generates a `citationKey` automatically
+- Uses the BibTeX title to derive a safe note filename
+- Optionally adds the BibTeX `url` into the note body as a clickable link
+- Adds BibTeX metadata to the currently open note
+- Can automatically maintain a `.bib` file from notes in your literature folder
 
-Quick starting guide for new plugin devs:
+## How it works
 
-- Check if [someone already developed a plugin for what you want](https://obsidian.md/plugins)! There might be an existing plugin similar enough that you can partner up with.
-- Make a copy of this repo as a template with the "Use this template" button (login to GitHub if you don't see it).
-- Clone your repo to a local development folder. For convenience, you can place this folder in your `.obsidian/plugins/your-plugin-name` folder.
-- Install NodeJS, then run `npm i` in the command line under your repo folder.
-- Run `npm run dev` to compile your plugin from `main.ts` to `main.js`.
-- Make changes to `main.ts` (or create new `.ts` files). Those changes should be automatically compiled into `main.js`.
-- Reload Obsidian to load the new version of your plugin.
-- Enable plugin in settings window.
-- For updates to the Obsidian API run `npm update` in the command line under your repo folder.
+The intended workflow is:
 
-## Releasing new releases
+1. Pick a folder in your vault for literature notes.
+2. Run a command and paste a BibTeX entry.
+3. The plugin parses the first BibTeX entry, creates note frontmatter from it, and saves the note in your literature folder.
+4. If BibTeX sync is enabled, the plugin rebuilds a configured `.bib` file from frontmatter across notes in that folder.
 
-- Update your `manifest.json` with your new version number, such as `1.0.1`, and the minimum Obsidian version required for your latest release.
-- Update your `versions.json` file with `"new-plugin-version": "minimum-obsidian-version"` so older versions of Obsidian can download an older version of your plugin that's compatible.
-- Create new GitHub release using your new version number as the "Tag version". Use the exact version number, don't include a prefix `v`. See here for an example: https://github.com/obsidianmd/obsidian-sample-plugin/releases
-- Upload the files `manifest.json`, `main.js`, `styles.css` as binary attachments. Note: The manifest.json file must be in two places, first the root path of your repository and also in the release.
-- Publish the release.
+This keeps the editable metadata inside your Obsidian notes while still allowing export back into BibTeX form.
 
-> You can simplify the version bump process by running `npm version patch`, `npm version minor` or `npm version major` after updating `minAppVersion` manually in `manifest.json`.
-> The command will bump version in `manifest.json` and `package.json`, and add the entry for the new version to `versions.json`
+## Commands
 
-## Adding your plugin to the community plugin list
+The plugin currently registers two commands:
 
-- Check the [plugin guidelines](https://docs.obsidian.md/Plugins/Releasing/Plugin+guidelines).
-- Publish an initial version.
-- Make sure you have a `README.md` file in the root of your repo.
-- Make a pull request at https://github.com/obsidianmd/obsidian-releases to add your plugin.
+- `Create literature note from BibTeX string`
+- `Add BibTeX metadata to current note`
 
-## How to use
+## Settings
 
-- Clone this repo.
-- Make sure your NodeJS is at least v16 (`node --version`).
-- `npm i` or `yarn` to install dependencies.
-- `npm run dev` to start compilation in watch mode.
+### Literature folder
 
-## Manually installing the plugin
+Path to the folder where new literature notes should be created. The setting uses vault folder suggestions while you type.
 
-- Copy over `main.js`, `styles.css`, `manifest.json` to your vault `VaultFolder/.obsidian/plugins/your-plugin-id/`.
+### Add URL to note content
 
-## Improve code quality with eslint
-- [ESLint](https://eslint.org/) is a tool that analyzes your code to quickly find problems. You can run ESLint against your plugin to find common bugs and ways to improve your code. 
-- This project already has eslint preconfigured, you can invoke a check by running`npm run lint`
-- Together with a custom eslint [plugin](https://github.com/obsidianmd/eslint-plugin) for Obsidan specific code guidelines.
-- A GitHub action is preconfigured to automatically lint every commit on all branches.
+When enabled, a BibTeX `url` field is also added to the note body as a clickable Markdown list item.
 
-## Funding URL
+### Enable automatic .bib sync
 
-You can include funding URLs where people who use your plugin can financially support it.
+When enabled, the plugin regenerates a `.bib` file whenever literature-note metadata changes, notes are deleted, or notes are renamed/moved.
 
-The simple way is to set the `fundingUrl` field to your link in your `manifest.json` file:
+### BibTeX file path
 
-```json
-{
-    "fundingUrl": "https://buymeacoffee.com"
-}
+Path to the `.bib` file to maintain inside the vault. The setting supports autocomplete for existing `.bib` files and also allows entering a new path.
+
+## Note format
+
+For newly created literature notes, the plugin writes:
+
+- all parsed BibTeX fields into YAML frontmatter
+- a generated `citationKey`
+- an `entryType` field when available
+- an `aliases` field containing the original title if the filename had to be sanitized or truncated
+
+If the note already exists, the plugin skips creation and shows an Obsidian notice.
+
+If the generated citation key collides with an existing one, the plugin appends `-1`, `-2`, and so on until it finds a free key, then warns via notice.
+
+## BibTeX sync behavior
+
+When `.bib` sync is enabled, the plugin scans Markdown files in the configured literature folder and extracts BibTeX entries from frontmatter.
+
+It excludes Obsidian-specific frontmatter keys such as:
+
+- `aliases`
+- `cssclass`
+- `cssclasses`
+- `tags`
+- `position`
+
+The generated `.bib` output is sorted by citation key for stable results.
+
+## Installation for development
+
+1. Clone this repository.
+2. Install dependencies:
+
+```bash
+npm install
 ```
 
-If you have multiple URLs, you can also do:
+3. Build once:
 
-```json
-{
-    "fundingUrl": {
-        "Buy Me a Coffee": "https://buymeacoffee.com",
-        "GitHub Sponsor": "https://github.com/sponsors",
-        "Patreon": "https://www.patreon.com/"
-    }
-}
+```bash
+npm run build
 ```
 
-## API Documentation
+4. Or run the watcher during development:
 
-See https://docs.obsidian.md
+```bash
+npm run dev
+```
+
+5. Copy `main.js`, `manifest.json`, and `styles.css` into:
+
+```text
+<your-vault>/.obsidian/plugins/obsidian-as-citation-manager/
+```
+
+6. Reload Obsidian and enable the plugin under **Settings → Community plugins**.
+
+## Project scripts
+
+- `npm run dev` builds in watch mode
+- `npm run build` runs TypeScript checks and creates the production bundle
+- `npm run lint` runs ESLint
+
+## Privacy and scope
+
+This plugin is designed for local vault use. It does not need network access for its core features and works entirely on files inside your Obsidian vault.
+
+## Current limitations
+
+- The BibTeX import uses the first parsed entry from the pasted input
+- The plugin assumes BibTeX data is stored in frontmatter for round-tripping into `.bib`
+- Automatic `.bib` sync currently reacts to note metadata changes, deletions, and renames, but does not expose a separate manual sync command
+
+## Sources
+
+- [Article Collection Academic Obs Workflows](https://publish.obsidian.md/hub/04+-+Guides%2C+Workflows%2C+%26+Courses/for+Academic+Writing)

@@ -25,6 +25,7 @@
 	},
 	"dependencies": {
 		"@retorquere/bibtex-parser": "^7.0.0",
-		"obsidian": "latest"
+		"obsidian": "latest",
+		"unicode2latex": "^5.0.18"
 	}
 }

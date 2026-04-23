@@ -1,3 +1,5 @@
+import { encodeBibtexValue } from "./bibtexValueEncoder";
+
 /**
  * Frontmatter fields that are Obsidian-specific and should not be included in BibTeX output.
  */
@@ -9,36 +11,10 @@ const EXCLUDED_FIELDS = new Set([
 	"position",
 ]);
 
-/**
- * Characters that need to be escaped in BibTeX field values.
- */
-const BIBTEX_SPECIAL_CHARS: Record<string, string> = {
-	"&": "\\&",
-	"%": "\\%",
-	"$": "\\$",
-	"#": "\\#",
-	"_": "\\_",
-	"{": "\\{",
-	"}": "\\}",
-	"~": "\\textasciitilde{}",
-	"^": "\\textasciicircum{}",
-};
-
 export interface BibEntry {
 	citationKey: string;
 	entryType: string;
 	fields: Record<string, string>;
-}
-
-/**
- * Escapes special BibTeX characters in a string.
- */
-function escapeBibtex(value: string): string {
-	let result = value;
-	for (const [char, escaped] of Object.entries(BIBTEX_SPECIAL_CHARS)) {
-		result = result.split(char).join(escaped);
-	}
-	return result;
 }
 
 /**
@@ -65,17 +41,19 @@ export function extractBibEntry(frontmatter: Record<string, unknown>): BibEntry 
 			continue;
 		}
 
-		let stringValue: string;
 		if (Array.isArray(value)) {
-			stringValue = value.join(" and ");
-		} else if (typeof value === "object") {
+			const stringValue = value.join(" and ");
+			if (stringValue) {
+				fields[key] = stringValue;
+			}
+
 			continue;
-		} else {
-			stringValue = String(value);
 		}
 
-		if (stringValue) {
-			fields[key] = stringValue;
+		if (typeof value === "string" && value) {
+			fields[key] = value;
+		} else if (typeof value === "number" || typeof value === "boolean") {
+			fields[key] = String(value);
 		}
 	}
 
@@ -92,7 +70,7 @@ export function formatBibEntry(entry: BibEntry): string {
 	const fieldEntries = Object.entries(entry.fields);
 	const lastIndex = fieldEntries.length - 1;
 	fieldEntries.forEach(([key, value], i) => {
-		const escapedValue = escapeBibtex(value);
+		const escapedValue = encodeBibtexValue(value);
 		const comma = i < lastIndex ? "," : "";
 		lines.push(`  ${key} = {${escapedValue}}${comma}`);
 	});
